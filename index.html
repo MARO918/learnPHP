@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="ja" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>単語マッチングゲーム</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="/_sdk/data_sdk.js"></script>
+  <script src="/_sdk/element_sdk.js"></script>
+  <style>
+    body {
+      box-sizing: border-box;
+    }
+    
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
+    
+    * {
+      font-family: 'Noto Sans JP', sans-serif;
+    }
+    
+    @keyframes celebrate {
+      0%, 100% { transform: scale(1) rotate(0deg); }
+      25% { transform: scale(1.2) rotate(-5deg); }
+      75% { transform: scale(1.2) rotate(5deg); }
+    }
+    
+    @keyframes confetti {
+      0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+    }
+    
+    .celebrate {
+      animation: celebrate 0.6s ease-in-out;
+    }
+    
+    .confetti {
+      position: fixed;
+      width: 10px;
+      height: 10px;
+      pointer-events: none;
+      animation: confetti 3s ease-out forwards;
+    }
+    
+    .term-card, .description-card {
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+    
+    .term-card:hover, .description-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+    }
+    
+    .selected {
+      transform: scale(1.05);
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.5);
+    }
+    
+    .matched {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+  </style>
+  <style>@view-transition { navigation: auto; }</style>
+ </head>
+ <body class="h-full">
+  <div id="app" class="w-full h-full overflow-auto"></div>
+  <script>
+    const phpMethods = [
+      { term: "array_map()", description: "配列の各要素にコールバック関数を適用する" },
+      { term: "array_filter()", description: "コールバック関数を使用して配列の要素をフィルタする" },
+      { term: "array_reduce()", description: "コールバック関数を使って配列を単一の値に還元する" },
+      { term: "array_merge()", description: "一つまたはそれ以上の配列をマージする" },
+      { term: "array_slice()", description: "配列の一部を展開する" },
+      { term: "array_push()", description: "一つ以上の要素を配列の最後に追加する" },
+      { term: "array_pop()", description: "配列の末尾から要素を取り除く" },
+      { term: "array_shift()", description: "配列の先頭から要素を取り出す" },
+      { term: "array_unshift()", description: "一つ以上の要素を配列の先頭に追加する" },
+      { term: "array_keys()", description: "配列のすべてのキーを返す" },
+      { term: "array_values()", description: "配列のすべての値を返す" },
+      { term: "array_search()", description: "指定した値を配列で検索し、見つかった場合に対応するキーを返す" },
+      { term: "in_array()", description: "配列に値が存在するかチェックする" },
+      { term: "count()", description: "配列の要素数、またはオブジェクトのプロパティ数を数える" },
+      { term: "sort()", description: "配列を昇順にソートする" },
+      { term: "rsort()", description: "配列を降順にソートする" },
+      { term: "asort()", description: "連想配列を値で昇順にソートする" },
+      { term: "ksort()", description: "連想配列をキーで昇順にソートする" },
+      { term: "explode()", description: "文字列を文字列により分割する" },
+      { term: "implode()", description: "配列要素を文字列により連結する" },
+      { term: "str_replace()", description: "検索文字列に一致したすべての文字列を置換する" },
+      { term: "substr()", description: "文字列の一部分を返す" },
+      { term: "strlen()", description: "文字列の長さを取得する" },
+      { term: "strpos()", description: "文字列内の部分文字列が最初に現れる位置を見つける" },
+      { term: "trim()", description: "文字列の先頭および末尾にあるホワイトスペースを取り除く" },
+      { term: "strtolower()", description: "文字列を小文字にする" },
+      { term: "strtoupper()", description: "文字列を大文字にする" },
+      { term: "json_encode()", description: "値をJSON形式にして返す" },
+      { term: "json_decode()", description: "JSON文字列をデコードする" },
+      { term: "file_get_contents()", description: "ファイルの内容を全て文字列に読み込む" }
+    ];
+
+    const defaultConfig = {
+      background_color: "#0f172a",
+      card_background: "#1e293b",
+      term_color: "#3b82f6",
+      description_color: "#8b5cf6",
+      text_color: "#f1f5f9",
+      accent_color: "#10b981",
+      font_family: "Noto Sans JP",
+      font_size: 16,
+      game_title: "単語マッチングゲーム",
+      instruction_text: "用語と説明を正しく結びつけてください"
+    };
+
+    let selectedTerm = null;
+    let selectedDescription = null;
+    let matchedPairs = new Set();
+    let correctCount = 0;
+    let hintsUsed = 0;
+    let gameStartTime = Date.now();
+    let currentRecordCount = 0;
+
+    const dataHandler = {
+      onDataChanged(data) {
+        currentRecordCount = data.length;
+        renderLeaderboard(data);
+      }
+    };
+
+    async function init() {
+      const initResult = await window.dataSdk.init(dataHandler);
+      if (!initResult.isOk) {
+        console.error("Failed to initialize data SDK");
+      }
+      
+      await window.elementSdk.init({
+        defaultConfig,
+        onConfigChange: async (config) => {
+          const customFont = config.font_family || defaultConfig.font_family;
+          const baseSize = config.font_size || defaultConfig.font_size;
+          const baseFontStack = 'sans-serif';
+          
+          document.body.style.background = config.background_color || defaultConfig.background_color;
+          
+          const title = document.getElementById('game-title');
+          if (title) {
+            title.textContent = config.game_title || defaultConfig.game_title;
+            title.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            title.style.fontSize = `${baseSize * 2}px`;
+            title.style.color = config.text_color || defaultConfig.text_color;
+          }
+          
+          const instruction = document.getElementById('instruction-text');
+          if (instruction) {
+            instruction.textContent = config.instruction_text || defaultConfig.instruction_text;
+            instruction.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            instruction.style.fontSize = `${baseSize}px`;
+            instruction.style.color = config.text_color || defaultConfig.text_color;
+          }
+          
+          const termCards = document.querySelectorAll('.term-card');
+          termCards.forEach(card => {
+            card.style.background = config.term_color || defaultConfig.term_color;
+            card.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            card.style.fontSize = `${baseSize * 0.9}px`;
+          });
+          
+          const descCards = document.querySelectorAll('.description-card');
+          descCards.forEach(card => {
+            card.style.background = config.description_color || defaultConfig.description_color;
+            card.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            card.style.fontSize = `${baseSize * 0.85}px`;
+          });
+          
+          const statsElements = document.querySelectorAll('.stat-text');
+          statsElements.forEach(el => {
+            el.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            el.style.fontSize = `${baseSize}px`;
+            el.style.color = config.text_color || defaultConfig.text_color;
+          });
+          
+          const buttons = document.querySelectorAll('.game-button');
+          buttons.forEach(btn => {
+            btn.style.background = config.accent_color || defaultConfig.accent_color;
+            btn.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            btn.style.fontSize = `${baseSize * 0.9}px`;
+          });
+          
+          const leaderboardItems = document.querySelectorAll('.leaderboard-item');
+          leaderboardItems.forEach(item => {
+            item.style.background = config.card_background || defaultConfig.card_background;
+            item.style.fontFamily = `${customFont}, ${baseFontStack}`;
+            item.style.fontSize = `${baseSize * 0.85}px`;
+            item.style.color = config.text_color || defaultConfig.text_color;
+          });
+        },
+        mapToCapabilities: (config) => ({
+          recolorables: [
+            {
+              get: () => config.background_color || defaultConfig.background_color,
+              set: (value) => {
+                config.background_color = value;
+                window.elementSdk.setConfig({ background_color: value });
+              }
+            },
+            {
+              get: () => config.card_background || defaultConfig.card_background,
+              set: (value) => {
+                config.card_background = value;
+                window.elementSdk.setConfig({ card_background: value });
+              }
+            },
+            {
+              get: () => config.text_color || defaultConfig.text_color,
+              set: (value) => {
+                config.text_color = value;
+                window.elementSdk.setConfig({ text_color: value });
+              }
+            },
+            {
+              get: () => config.term_color || defaultConfig.term_color,
+              set: (value) => {
+                config.term_color = value;
+                window.elementSdk.setConfig({ term_color: value });
+              }
+            },
+            {
+              get: () => config.accent_color || defaultConfig.accent_color,
+              set: (value) => {
+                config.accent_color = value;
+                window.elementSdk.setConfig({ accent_color: value });
+              }
+            }
+          ],
+          borderables: [],
+          fontEditable: {
+            get: () => config.font_family || defaultConfig.font_family,
+            set: (value) => {
+              config.font_family = value;
+              window.elementSdk.setConfig({ font_family: value });
+            }
+          },
+          fontSizeable: {
+            get: () => config.font_size || defaultConfig.font_size,
+            set: (value) => {
+              config.font_size = value;
+              window.elementSdk.setConfig({ font_size: value });
+            }
+          }
+        }),
+        mapToEditPanelValues: (config) => new Map([
+          ["game_title", config.game_title || defaultConfig.game_title],
+          ["instruction_text", config.instruction_text || defaultConfig.instruction_text]
+        ])
+      });
+      
+      renderGame();
+    }
+
+    function shuffleArray(array) {
+      const newArray = [...array];
+      for (let i = newArray.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+      }
+      return newArray;
+    }
+
+    function renderGame() {
+      const config = window.elementSdk?.config || defaultConfig;
+      const customFont = config.font_family || defaultConfig.font_family;
+      const baseSize = config.font_size || defaultConfig.font_size;
+      const baseFontStack = 'sans-serif';
+      
+      const shuffledTerms = shuffleArray(phpMethods);
+      const shuffledDescriptions = shuffleArray(phpMethods);
+      
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <div class="w-full min-h-full p-8" style="background: ${config.background_color || defaultConfig.background_color};">
+          <div class="max-w-7xl mx-auto">
+            <div class="text-center mb-8">
+              <h1 id="game-title" class="text-5xl font-black mb-4" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 2}px; color: ${config.text_color || defaultConfig.text_color};">
+                ${config.game_title || defaultConfig.game_title}
+              </h1>
+              <p id="instruction-text" class="text-xl mb-6" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; color: ${config.text_color || defaultConfig.text_color};">
+                ${config.instruction_text || defaultConfig.instruction_text}
+              </p>
+              
+              <div class="flex justify-center gap-8 mb-6">
+                <div class="stat-text" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; color: ${config.text_color || defaultConfig.text_color};">
+                  <span class="font-bold">正解数:</span> <span id="correct-count" class="text-2xl font-black">${correctCount}</span> / ${phpMethods.length}
+                </div>
+                <div class="stat-text" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; color: ${config.text_color || defaultConfig.text_color};">
+                  <span class="font-bold">ヒント使用:</span> <span id="hint-count" class="text-2xl font-black">${hintsUsed}</span>
+                </div>
+              </div>
+              
+              <button id="hint-btn" class="game-button px-6 py-3 rounded-lg text-white font-bold shadow-lg hover:shadow-xl transition-all" style="background: ${config.accent_color || defaultConfig.accent_color}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.9}px;">
+                💡 ヒントを見る
+              </button>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+              <div>
+                <h2 class="text-2xl font-bold mb-4 text-center" style="font-family: ${customFont}, ${baseFontStack}; color: ${config.text_color || defaultConfig.text_color};">用語</h2>
+                <div id="terms-container" class="space-y-3">
+                  ${shuffledTerms.map((item, index) => `
+                    <div class="term-card p-4 rounded-lg text-white font-bold text-center shadow-lg" 
+                         data-term="${item.term}" 
+                         data-index="${index}"
+                         style="background: ${config.term_color || defaultConfig.term_color}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.9}px;">
+                      ${item.term}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              
+              <div>
+                <h2 class="text-2xl font-bold mb-4 text-center" style="font-family: ${customFont}, ${baseFontStack}; color: ${config.text_color || defaultConfig.text_color};">説明</h2>
+                <div id="descriptions-container" class="space-y-3">
+                  ${shuffledDescriptions.map((item, index) => `
+                    <div class="description-card p-4 rounded-lg text-white font-semibold shadow-lg" 
+                         data-description="${item.term}" 
+                         data-index="${index}"
+                         style="background: ${config.description_color || defaultConfig.description_color}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.85}px;">
+                      ${item.description}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+            
+            <div id="leaderboard-section" class="mt-12">
+              <h2 class="text-3xl font-black mb-6 text-center" style="font-family: ${customFont}, ${baseFontStack}; color: ${config.text_color || defaultConfig.text_color};">🏆 リーダーボード</h2>
+              <div id="leaderboard-container" class="max-w-2xl mx-auto space-y-3"></div>
+            </div>
+          </div>
+        </div>
+      `;
+      
+      attachEventListeners();
+    }
+
+    function attachEventListeners() {
+      const termCards = document.querySelectorAll('.term-card');
+      const descCards = document.querySelectorAll('.description-card');
+      const hintBtn = document.getElementById('hint-btn');
+      
+      termCards.forEach(card => {
+        card.addEventListener('click', () => selectTerm(card));
+      });
+      
+      descCards.forEach(card => {
+        card.addEventListener('click', () => selectDescription(card));
+      });
+      
+      hintBtn.addEventListener('click', showHint);
+    }
+
+    function selectTerm(card) {
+      if (matchedPairs.has(card.dataset.term)) return;
+      
+      if (selectedTerm) {
+        selectedTerm.classList.remove('selected');
+      }
+      
+      selectedTerm = card;
+      card.classList.add('selected');
+      
+      checkMatch();
+    }
+
+    function selectDescription(card) {
+      if (matchedPairs.has(card.dataset.description)) return;
+      
+      if (selectedDescription) {
+        selectedDescription.classList.remove('selected');
+      }
+      
+      selectedDescription = card;
+      card.classList.add('selected');
+      
+      checkMatch();
+    }
+
+    function checkMatch() {
+      if (!selectedTerm || !selectedDescription) return;
+      
+      const termValue = selectedTerm.dataset.term;
+      const descValue = selectedDescription.dataset.description;
+      
+      if (termValue === descValue) {
+        correctCount++;
+        matchedPairs.add(termValue);
+        
+        selectedTerm.classList.add('matched', 'celebrate');
+        selectedDescription.classList.add('matched', 'celebrate');
+        
+        createConfetti(selectedTerm);
+        createConfetti(selectedDescription);
+        
+        document.getElementById('correct-count').textContent = correctCount;
+        
+        selectedTerm = null;
+        selectedDescription = null;
+        
+        if (correctCount === phpMethods.length) {
+          setTimeout(() => showCompletionModal(), 1000);
+        }
+      } else {
+        setTimeout(() => {
+          selectedTerm.classList.remove('selected');
+          selectedDescription.classList.remove('selected');
+          selectedTerm = null;
+          selectedDescription = null;
+        }, 500);
+      }
+    }
+
+    function createConfetti(element) {
+      const config = window.elementSdk?.config || defaultConfig;
+      const rect = element.getBoundingClientRect();
+      const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24', '#6c5ce7'];
+      
+      for (let i = 0; i < 15; i++) {
+        const confetti = document.createElement('div');
+        confetti.className = 'confetti';
+        confetti.style.left = `${rect.left + rect.width / 2}px`;
+        confetti.style.top = `${rect.top + rect.height / 2}px`;
+        confetti.style.background = colors[Math.floor(Math.random() * colors.length)];
+        confetti.style.animationDelay = `${Math.random() * 0.3}s`;
+        confetti.style.animationDuration = `${2 + Math.random()}s`;
+        document.body.appendChild(confetti);
+        
+        setTimeout(() => confetti.remove(), 3000);
+      }
+    }
+
+    function showHint() {
+      const unmatchedTerms = phpMethods.filter(item => !matchedPairs.has(item.term));
+      if (unmatchedTerms.length === 0) return;
+      
+      const randomItem = unmatchedTerms[Math.floor(Math.random() * unmatchedTerms.length)];
+      
+      const termCard = document.querySelector(`.term-card[data-term="${randomItem.term}"]`);
+      const descCard = document.querySelector(`.description-card[data-description="${randomItem.term}"]`);
+      
+      if (termCard && descCard) {
+        termCard.style.boxShadow = '0 0 20px 5px rgba(255, 215, 0, 0.8)';
+        descCard.style.boxShadow = '0 0 20px 5px rgba(255, 215, 0, 0.8)';
+        
+        setTimeout(() => {
+          termCard.style.boxShadow = '';
+          descCard.style.boxShadow = '';
+        }, 2000);
+        
+        hintsUsed++;
+        document.getElementById('hint-count').textContent = hintsUsed;
+      }
+    }
+
+    function showCompletionModal() {
+      const config = window.elementSdk?.config || defaultConfig;
+      const customFont = config.font_family || defaultConfig.font_family;
+      const baseSize = config.font_size || defaultConfig.font_size;
+      const baseFontStack = 'sans-serif';
+      
+      const elapsedTime = Math.floor((Date.now() - gameStartTime) / 1000);
+      const minutes = Math.floor(elapsedTime / 60);
+      const seconds = elapsedTime % 60;
+      
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+      modal.style.background = 'rgba(0,0,0,0.8)';
+      modal.innerHTML = `
+        <div class="p-8 rounded-2xl shadow-2xl max-w-md w-full mx-4 text-center" style="background: ${config.card_background || defaultConfig.card_background};">
+          <div class="text-6xl mb-4">🎉</div>
+          <h2 class="text-4xl font-black mb-4" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 2}px; color: ${config.text_color || defaultConfig.text_color};">
+            おめでとうございます！
+          </h2>
+          <p class="text-xl mb-6" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; color: ${config.text_color || defaultConfig.text_color};">
+            全問正解しました！<br>
+            時間: ${minutes}分${seconds}秒<br>
+            ヒント使用: ${hintsUsed}回
+          </p>
+          
+          <div class="mb-6">
+            <label class="block text-left mb-2 font-bold" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.9}px; color: ${config.text_color || defaultConfig.text_color};">
+              プレイヤー名
+            </label>
+            <input id="player-name-input" type="text" placeholder="名前を入力" 
+                   class="w-full p-3 rounded-lg border-2 focus:outline-none focus:border-blue-500"
+                   style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; background: ${config.background_color || defaultConfig.background_color}; color: ${config.text_color || defaultConfig.text_color}; border-color: ${config.term_color || defaultConfig.term_color};">
+          </div>
+          
+          <div class="flex gap-4">
+            <button id="save-score-btn" class="flex-1 px-6 py-3 rounded-lg text-white font-bold shadow-lg hover:shadow-xl transition-all" 
+                    style="background: ${config.accent_color || defaultConfig.accent_color}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.9}px;">
+              スコアを保存
+            </button>
+            <button id="play-again-btn" class="flex-1 px-6 py-3 rounded-lg text-white font-bold shadow-lg hover:shadow-xl transition-all" 
+                    style="background: ${config.term_color || defaultConfig.term_color}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.9}px;">
+              もう一度プレイ
+            </button>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      document.getElementById('save-score-btn').addEventListener('click', async () => {
+        const playerName = document.getElementById('player-name-input').value.trim();
+        if (!playerName) {
+          const input = document.getElementById('player-name-input');
+          input.style.borderColor = '#ef4444';
+          return;
+        }
+        
+        if (currentRecordCount >= 999) {
+          const errorMsg = document.createElement('p');
+          errorMsg.textContent = 'スコアの保存上限（999件）に達しました';
+          errorMsg.style.color = '#ef4444';
+          errorMsg.style.marginTop = '10px';
+          errorMsg.style.fontFamily = `${customFont}, ${baseFontStack}`;
+          document.getElementById('save-score-btn').parentElement.appendChild(errorMsg);
+          return;
+        }
+        
+        const saveBtn = document.getElementById('save-score-btn');
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+        
+        const result = await window.dataSdk.create({
+          player_name: playerName,
+          score: correctCount,
+          total_questions: phpMethods.length,
+          completed_at: new Date().toISOString()
+        });
+        
+        if (result.isOk) {
+          modal.remove();
+          resetGame();
+        } else {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'スコアを保存';
+          const errorMsg = document.createElement('p');
+          errorMsg.textContent = 'スコアの保存に失敗しました';
+          errorMsg.style.color = '#ef4444';
+          errorMsg.style.marginTop = '10px';
+          saveBtn.parentElement.appendChild(errorMsg);
+        }
+      });
+      
+      document.getElementById('play-again-btn').addEventListener('click', () => {
+        modal.remove();
+        resetGame();
+      });
+    }
+
+    function resetGame() {
+      selectedTerm = null;
+      selectedDescription = null;
+      matchedPairs.clear();
+      correctCount = 0;
+      hintsUsed = 0;
+      gameStartTime = Date.now();
+      renderGame();
+    }
+
+    function renderLeaderboard(data) {
+      const config = window.elementSdk?.config || defaultConfig;
+      const customFont = config.font_family || defaultConfig.font_family;
+      const baseSize = config.font_size || defaultConfig.font_size;
+      const baseFontStack = 'sans-serif';
+      
+      const container = document.getElementById('leaderboard-container');
+      if (!container) return;
+      
+      const sortedData = [...data].sort((a, b) => b.score - a.score).slice(0, 10);
+      
+      if (sortedData.length === 0) {
+        container.innerHTML = `<p class="text-center" style="font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize}px; color: ${config.text_color || defaultConfig.text_color};">まだスコアがありません</p>`;
+        return;
+      }
+      
+      container.innerHTML = sortedData.map((record, index) => {
+        const date = new Date(record.completed_at);
+        const medals = ['🥇', '🥈', '🥉'];
+        const medal = index < 3 ? medals[index] : `${index + 1}.`;
+        
+        return `
+          <div class="leaderboard-item p-4 rounded-lg flex justify-between items-center shadow-md" 
+               style="background: ${config.card_background || defaultConfig.card_background}; font-family: ${customFont}, ${baseFontStack}; font-size: ${baseSize * 0.85}px; color: ${config.text_color || defaultConfig.text_color};">
+            <div class="flex items-center gap-4">
+              <span class="text-2xl font-bold">${medal}</span>
+              <div>
+                <div class="font-bold">${record.player_name}</div>
+                <div class="text-sm opacity-75">${date.toLocaleDateString('ja-JP')}</div>
+              </div>
+            </div>
+            <div class="text-right">
+              <div class="text-2xl font-black">${record.score}/${record.total_questions}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    init();
+  </script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9b420365e39ffcdb',t:'MTc2Njc2NzE1Ni4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
