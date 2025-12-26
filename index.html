@@ -1,12 +1,39 @@
 <!doctype html>
 <html lang="ja" class="h-full">
- <head>
+<head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>単語マッチングゲーム</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="/_sdk/data_sdk.js"></script>
-  <script src="/_sdk/element_sdk.js"></script>
+  
+  <script>
+    if (!window.dataSdk) {
+      window.dataSdk = {
+        init: async (handler) => {
+          console.log('SDK: init (Mock)');
+          const data = JSON.parse(localStorage.getItem('local_scores_v1') || '[]');
+          // 少し遅延させてデータを返す（非同期の挙動を模倣）
+          setTimeout(() => handler.onDataChanged(data), 100);
+          return { isOk: true };
+        },
+        create: async (record) => {
+          console.log('SDK: create (Mock)', record);
+          const data = JSON.parse(localStorage.getItem('local_scores_v1') || '[]');
+          data.push(record);
+          localStorage.setItem('local_scores_v1', JSON.stringify(data));
+          return { isOk: true };
+        }
+      };
+    }
+    if (!window.elementSdk) {
+      window.elementSdk = {
+        init: async () => console.log('SDK: Element Init (Mock)'),
+        setConfig: () => {},
+        config: null // デフォルト設定を使わせる
+      };
+    }
+  </script>
+
   <style>
     /* 全要素に対して box-sizing を適用 */
     *, *::before, *::after {
@@ -30,6 +57,20 @@
       0% { transform: translateY(0) rotate(0deg); opacity: 1; }
       100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
     }
+
+    /* ▼ 追加: 不正解時のシェイクアニメーション ▼ */
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-5px); }
+      40%, 80% { transform: translateX(5px); }
+    }
+
+    .shake-wrong {
+      animation: shake 0.4s ease-in-out;
+      background-color: #ef4444 !important; /* 間違いを赤色で強調 */
+      border: 2px solid #f87171 !important;
+    }
+    /* ▲ 追加ここまで ▲ */
 
     .celebrate {
       animation: celebrate 0.6s ease-in-out;
@@ -56,12 +97,14 @@
 
     .selected {
       transform: scale(1.05);
-      box-shadow: 0 0 0 3px rgba(255,255,255,0.5);
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.8);
+      z-index: 10;
     }
 
     .matched {
       opacity: 0.5;
       pointer-events: none;
+      filter: grayscale(0.5);
     }
 
     @media (max-width: 768px) {
@@ -69,8 +112,8 @@
     }
   </style>
   <style>@view-transition { navigation: auto; }</style>
- </head>
- <body class="h-full">
+</head>
+<body class="h-full">
   <div id="app" class="w-full h-full overflow-auto"></div>
   <script>
     const phpMethods = [
@@ -129,21 +172,16 @@
 
     const dataHandler = {
       onDataChanged(data) {
-        currentRecordCount = data.length;
+        currentRecordCount = data ? data.length : 0;
         renderLeaderboard(data);
       }
     };
 
     async function init() {
-      // dataSdk と elementSdk が存在するかガード
+      // dataSdk と elementSdk の初期化（モックがあるためエラーにならない）
       try {
         if (window.dataSdk && typeof window.dataSdk.init === 'function') {
-          const initResult = await window.dataSdk.init(dataHandler);
-          if (!initResult?.isOk) {
-            console.warn("dataSdk が初期化できませんでした、内部ストレージは利用できません。");
-          }
-        } else {
-          console.warn("dataSdk が見つかりません（開発用：スタブ or サーバ未接続）。");
+          await window.dataSdk.init(dataHandler);
         }
       } catch (e) {
         console.warn("dataSdk init エラー:", e);
@@ -156,67 +194,24 @@
             onConfigChange: async (config) => {
               applyConfigToExistingElements(config);
             },
+            // ... capability maps (省略なしで維持) ...
             mapToCapabilities: (config) => ({
               recolorables: [
-                {
-                  get: () => config.background_color || defaultConfig.background_color,
-                  set: (value) => {
-                    config.background_color = value;
-                    window.elementSdk.setConfig({ background_color: value });
-                  }
-                },
-                {
-                  get: () => config.card_background || defaultConfig.card_background,
-                  set: (value) => {
-                    config.card_background = value;
-                    window.elementSdk.setConfig({ card_background: value });
-                  }
-                },
-                {
-                  get: () => config.text_color || defaultConfig.text_color,
-                  set: (value) => {
-                    config.text_color = value;
-                    window.elementSdk.setConfig({ text_color: value });
-                  }
-                },
-                {
-                  get: () => config.term_color || defaultConfig.term_color,
-                  set: (value) => {
-                    config.term_color = value;
-                    window.elementSdk.setConfig({ term_color: value });
-                  }
-                },
-                {
-                  get: () => config.accent_color || defaultConfig.accent_color,
-                  set: (value) => {
-                    config.accent_color = value;
-                    window.elementSdk.setConfig({ accent_color: value });
-                  }
-                }
+                { get: () => config.background_color || defaultConfig.background_color, set: (v) => { config.background_color = v; window.elementSdk.setConfig({ background_color: v }); } },
+                { get: () => config.card_background || defaultConfig.card_background, set: (v) => { config.card_background = v; window.elementSdk.setConfig({ card_background: v }); } },
+                { get: () => config.text_color || defaultConfig.text_color, set: (v) => { config.text_color = v; window.elementSdk.setConfig({ text_color: v }); } },
+                { get: () => config.term_color || defaultConfig.term_color, set: (v) => { config.term_color = v; window.elementSdk.setConfig({ term_color: v }); } },
+                { get: () => config.accent_color || defaultConfig.accent_color, set: (v) => { config.accent_color = v; window.elementSdk.setConfig({ accent_color: v }); } }
               ],
               borderables: [],
-              fontEditable: {
-                get: () => config.font_family || defaultConfig.font_family,
-                set: (value) => {
-                  config.font_family = value;
-                  window.elementSdk.setConfig({ font_family: value });
-                }
-              },
-              fontSizeable: {
-                get: () => config.font_size || defaultConfig.font_size,
-                set: (value) => {
-                  config.font_size = value;
-                  window.elementSdk.setConfig({ font_size: value });
-                }
-              }
+              fontEditable: { get: () => config.font_family || defaultConfig.font_family, set: (v) => { config.font_family = v; window.elementSdk.setConfig({ font_family: v }); } },
+              fontSizeable: { get: () => config.font_size || defaultConfig.font_size, set: (v) => { config.font_size = v; window.elementSdk.setConfig({ font_size: v }); } }
             }),
             mapToEditPanelValues: (config) => new Map([
               ["game_title", config.game_title || defaultConfig.game_title],
               ["instruction_text", config.instruction_text || defaultConfig.instruction_text]
             ])
           });
-        } else {
-          console.warn("elementSdk が見つかりません（編集用の SDK が未接続）。");
         }
       } catch (e) {
         console.warn("elementSdk init エラー:", e);
@@ -295,7 +290,6 @@
     }
 
     function renderGame() {
-      // 必ずゲーム状態をリセット（再描画時に前のスコアを保持しない）
       selectedTerm = null;
       selectedDescription = null;
       matchedPairs.clear();
@@ -303,7 +297,7 @@
       hintsUsed = 0;
       gameStartTime = Date.now();
 
-      const config = window.elementSdk?.config || defaultConfig;
+      const config = (window.elementSdk && window.elementSdk.config) ? window.elementSdk.config : defaultConfig;
       const customFont = config.font_family || defaultConfig.font_family;
       const baseSize = config.font_size || defaultConfig.font_size;
       const baseFontStack = 'sans-serif';
@@ -376,6 +370,8 @@
       `;
 
       attachEventListeners();
+      // SDK初期化前でもローカルストレージがあれば表示
+      renderLeaderboard();
     }
 
     function attachEventListeners() {
@@ -450,15 +446,21 @@
           setTimeout(() => showCompletionModal(), 800);
         }
       } else {
-        // 不正解時はフィードバック（短時間）
-        selectedTerm.classList.add('shake-wrong');
-        selectedDescription.classList.add('shake-wrong');
+        // 不正解時はフィードバック
+        const tempTerm = selectedTerm;
+        const tempDesc = selectedDescription;
+
+        tempTerm.classList.add('shake-wrong');
+        tempDesc.classList.add('shake-wrong');
+
+        // アニメーション終了後にクラスを削除
         setTimeout(() => {
-          if (selectedTerm) selectedTerm.classList.remove('selected','shake-wrong');
-          if (selectedDescription) selectedDescription.classList.remove('selected','shake-wrong');
-          selectedTerm = null;
-          selectedDescription = null;
+          if (tempTerm) tempTerm.classList.remove('selected', 'shake-wrong');
+          if (tempDesc) tempDesc.classList.remove('selected', 'shake-wrong');
         }, 500);
+        
+        selectedTerm = null;
+        selectedDescription = null;
       }
     }
 
@@ -490,7 +492,6 @@
       if (unmatchedTerms.length === 0) return;
 
       const randomItem = unmatchedTerms[Math.floor(Math.random() * unmatchedTerms.length)];
-
       const termCard = document.querySelector(`.term-card[data-term="${escapeSelector(randomItem.term)}"]`);
       const descCard = document.querySelector(`.description-card[data-term="${escapeSelector(randomItem.term)}"]`);
 
@@ -509,13 +510,12 @@
       }
     }
 
-    // CSS セレクタ用に必要なエスケープ（用語に特殊文字が入る可能性に備える）
     function escapeSelector(str) {
       return str.replace(/([ !"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~])/g, "\\$1");
     }
 
     function showCompletionModal() {
-      const config = window.elementSdk?.config || defaultConfig;
+      const config = (window.elementSdk && window.elementSdk.config) ? window.elementSdk.config : defaultConfig;
       const customFont = config.font_family || defaultConfig.font_family;
       const baseSize = config.font_size || defaultConfig.font_size;
       const baseFontStack = 'sans-serif';
@@ -571,57 +571,45 @@
           return;
         }
 
-        if (currentRecordCount >= 999) {
-          const errorMsg = document.createElement('p');
-          errorMsg.textContent = 'スコアの保存上限（999件）に達しました';
-          errorMsg.style.color = '#ef4444';
-          errorMsg.style.marginTop = '10px';
-          errorMsg.style.fontFamily = `${customFont}, ${baseFontStack}`;
-          document.getElementById('save-score-btn').parentElement.appendChild(errorMsg);
-          return;
-        }
-
         const saveBtn = document.getElementById('save-score-btn');
         saveBtn.disabled = true;
         saveBtn.textContent = '保存中...';
 
-        try {
-          if (window.dataSdk && typeof window.dataSdk.create === 'function') {
-            const result = await window.dataSdk.create({
-              player_name: playerName,
-              score: correctCount,
-              total_questions: phpMethods.length,
-              completed_at: new Date().toISOString()
-            });
+        const record = {
+          player_name: playerName,
+          score: correctCount,
+          total_questions: phpMethods.length,
+          completed_at: new Date().toISOString()
+        };
 
-            if (result?.isOk) {
-              modal.remove();
-              resetGame();
-            } else {
-              throw new Error('保存に失敗しました');
-            }
+        try {
+          // SDK経由で保存（モック含む）
+          if (window.dataSdk && window.dataSdk.create) {
+             const result = await window.dataSdk.create(record);
+             if (result && result.isOk) {
+                // リーダーボード更新のために最新データを再取得（モックだと自動で更新されない場合があるため）
+                if (window.dataSdk.init) {
+                   await window.dataSdk.init(dataHandler);
+                }
+                modal.remove();
+                resetGame();
+             } else {
+                throw new Error("SDK Save Failed");
+             }
           } else {
-            // SDK がなければローカルで簡易保存（開発時のフォールバック）
-            console.warn('dataSdk.create が無いためローカルに保存します（開発用）');
+            // SDKが全くない場合の最終手段（通常はモックが動くのでここには来ない）
             const records = JSON.parse(localStorage.getItem('local_scores_v1') || '[]');
-            records.push({
-              player_name: playerName,
-              score: correctCount,
-              total_questions: phpMethods.length,
-              completed_at: new Date().toISOString()
-            });
+            records.push(record);
             localStorage.setItem('local_scores_v1', JSON.stringify(records));
+            renderLeaderboard(); // 画面更新
             modal.remove();
             resetGame();
           }
         } catch (e) {
+          console.error(e);
           saveBtn.disabled = false;
           saveBtn.textContent = 'スコアを保存';
-          const errorMsg = document.createElement('p');
-          errorMsg.textContent = 'スコアの保存に失敗しました';
-          errorMsg.style.color = '#ef4444';
-          errorMsg.style.marginTop = '10px';
-          saveBtn.parentElement.appendChild(errorMsg);
+          alert("保存に失敗しました");
         }
       });
 
@@ -642,7 +630,7 @@
     }
 
     function renderLeaderboard(data) {
-      const config = window.elementSdk?.config || defaultConfig;
+      const config = (window.elementSdk && window.elementSdk.config) ? window.elementSdk.config : defaultConfig;
       const customFont = config.font_family || defaultConfig.font_family;
       const baseSize = config.font_size || defaultConfig.font_size;
       const baseFontStack = 'sans-serif';
@@ -650,20 +638,17 @@
       const container = document.getElementById('leaderboard-container');
       if (!container) return;
 
-      // data が提供されない場合はローカルストレージの簡易表示を試みる
-      let records = Array.isArray(data) ? data : null;
+      let records = data;
+      // データが渡されない場合はローカルストレージから取得
       if (!records) {
-        const local = localStorage.getItem('local_scores_v1');
-        if (local) {
-          try {
-            records = JSON.parse(local);
-          } catch (e) {
-            records = [];
-          }
-        } else {
+        try {
+          records = JSON.parse(localStorage.getItem('local_scores_v1') || '[]');
+        } catch (e) {
           records = [];
         }
       }
+
+      if (!Array.isArray(records)) records = [];
 
       const sortedData = [...records].sort((a, b) => b.score - a.score).slice(0, 10);
 
@@ -705,6 +690,5 @@
     // 初期化呼び出し
     init();
   </script>
-  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9b420365e39ffcdb',t:'MTc2Njc2NzE1Ni4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>
 </body>
 </html>
